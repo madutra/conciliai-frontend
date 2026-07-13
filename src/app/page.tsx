@@ -1,65 +1,101 @@
-import Image from "next/image";
+import Link from "next/link";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { NewAccountForm } from "@/components/new-account-form";
+import { NewBatchForm } from "@/components/new-batch-form";
+import { BatchStatusBadge } from "@/components/status-badges";
+import { formatDate } from "@/lib/format";
+import { listBankAccounts, listBatches, type BankAccount, type ReconciliationBatch } from "@/lib/api";
 
-export default function Home() {
+export const dynamic = "force-dynamic";
+
+export default async function Home() {
+  let accounts: BankAccount[] = [];
+  let loadError: string | null = null;
+
+  try {
+    accounts = await listBankAccounts();
+  } catch {
+    loadError = "Não foi possível conectar ao backend. Confirme se ele está rodando em http://localhost:3001.";
+  }
+
+  const batchesByAccount = new Map<string, ReconciliationBatch[]>();
+  if (!loadError) {
+    await Promise.all(
+      accounts.map(async (account) => {
+        batchesByAccount.set(account.id, await listBatches({ bankAccountId: account.id }));
+      }),
+    );
+  }
+
   return (
-    <div className="flex flex-col flex-1 items-center justify-center bg-zinc-50 font-sans dark:bg-black">
-      <main className="flex flex-1 w-full max-w-3xl flex-col items-center justify-between py-32 px-16 bg-white dark:bg-black sm:items-start">
-        <Image
-          className="dark:invert"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
-          priority
-        />
-        <div className="flex flex-col items-center gap-6 text-center sm:items-start sm:text-left">
-          <h1 className="max-w-xs text-3xl font-semibold leading-10 tracking-tight text-black dark:text-zinc-50">
-            To get started, edit the page.tsx file.
-          </h1>
-          <p className="max-w-md text-lg leading-8 text-zinc-600 dark:text-zinc-400">
-            Looking for a starting point or more instructions? Head over to{" "}
-            <a
-              href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Templates
-            </a>{" "}
-            or the{" "}
-            <a
-              href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Learning
-            </a>{" "}
-            center.
-          </p>
-        </div>
-        <div className="flex flex-col gap-4 text-base font-medium sm:flex-row">
-          <a
-            className="flex h-12 w-full items-center justify-center gap-2 rounded-full bg-foreground px-5 text-background transition-colors hover:bg-[#383838] dark:hover:bg-[#ccc] md:w-[158px]"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={16}
-            />
-            Deploy Now
-          </a>
-          <a
-            className="flex h-12 w-full items-center justify-center rounded-full border border-solid border-black/[.08] px-5 transition-colors hover:border-transparent hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-[#1a1a1a] md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Documentation
-          </a>
-        </div>
-      </main>
+    <div className="mx-auto flex w-full max-w-4xl flex-1 flex-col gap-8 px-6 py-12">
+      <header>
+        <h1 className="text-2xl font-semibold tracking-tight">ConciliAI</h1>
+        <p className="text-muted-foreground mt-1 text-sm">
+          Conciliação bancária assistida por agentes de IA — determinístico primeiro, IA só nos órfãos.
+        </p>
+      </header>
+
+      {loadError && (
+        <Card className="border-destructive/50">
+          <CardContent className="text-destructive text-sm">{loadError}</CardContent>
+        </Card>
+      )}
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Contas bancárias</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <NewAccountForm />
+        </CardContent>
+      </Card>
+
+      <div className="flex flex-col gap-4">
+        {accounts.length === 0 && !loadError && (
+          <p className="text-muted-foreground text-sm">Nenhuma conta cadastrada ainda — crie uma acima.</p>
+        )}
+
+        {accounts.map((account) => {
+          const batches = batchesByAccount.get(account.id) ?? [];
+          return (
+            <Card key={account.id}>
+              <CardHeader className="flex flex-row items-center justify-between">
+                <div>
+                  <CardTitle>{account.name}</CardTitle>
+                  {(account.bankCode || account.accountNumber) && (
+                    <p className="text-muted-foreground text-xs">
+                      {[account.bankCode, account.accountNumber].filter(Boolean).join(" · ")}
+                    </p>
+                  )}
+                </div>
+                <NewBatchForm bankAccountId={account.id} />
+              </CardHeader>
+              <CardContent>
+                {batches.length === 0 ? (
+                  <p className="text-muted-foreground text-sm">Nenhuma conciliação ainda.</p>
+                ) : (
+                  <ul className="flex flex-col gap-2">
+                    {batches.map((batch) => (
+                      <li key={batch.id}>
+                        <Link
+                          href={`/batches/${batch.id}`}
+                          className="hover:bg-muted flex items-center justify-between rounded-md border px-3 py-2 text-sm transition-colors"
+                        >
+                          <span>
+                            Referência {batch.referenceMonth} — criado em {formatDate(batch.createdAt)}
+                          </span>
+                          <BatchStatusBadge status={batch.status} />
+                        </Link>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </CardContent>
+            </Card>
+          );
+        })}
+      </div>
     </div>
   );
 }
