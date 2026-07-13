@@ -9,7 +9,7 @@ export default async function BatchPage({ params }: { params: Promise<{ id: stri
   const summary = batch.status === "MATCHED" || batch.status === "REVIEWED" ? await getSummary(id) : null;
 
   return (
-    <div className="mx-auto w-full max-w-6xl flex-1 px-6 py-12">
+    <div className="mx-auto w-full max-w-6xl flex-1 px-6 py-12 sm:px-10">
       <BatchWorkspace initialBatch={batch} initialSummary={summary} />
     </div>
   );

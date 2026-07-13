@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
+import { Loader2, Plus } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { createBatch } from "@/lib/api";
@@ -39,6 +40,7 @@ export function NewBatchForm({ bankAccountId }: { bankAccountId: string }) {
         className="w-40"
       />
       <Button type="submit" size="sm" variant="secondary" disabled={submitting}>
+        {submitting ? <Loader2 className="size-3.5 animate-spin" /> : <Plus className="size-3.5" />}
         {submitting ? "Criando…" : "Nova conciliação"}
       </Button>
     </form>
