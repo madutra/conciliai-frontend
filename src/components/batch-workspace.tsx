@@ -13,6 +13,7 @@ import {
   Loader2,
   Play,
   Sparkles,
+  Wallet,
   X,
 } from "lucide-react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -36,30 +37,33 @@ import {
   runReconciliation,
   updateDivergenceStatus,
   uploadBankStatement,
+  uploadFinancialStatement,
   uploadLedger,
   type BatchSummary,
   type Divergence,
   type ReconciliationBatch,
 } from "@/lib/api";
 
+// Onde o lançamento órfão existe e onde ele falta, por tipo + perna
+const DIVERGENCE_LABEL: Record<string, string> = {
+  "MISSING_IN_FINANCIAL:BANK_VS_FINANCIAL": "No banco, falta no financeiro",
+  "MISSING_IN_BANK:BANK_VS_FINANCIAL": "No financeiro, falta no banco",
+  "MISSING_IN_LEDGER:FINANCIAL_VS_LEDGER": "No financeiro, falta no razão",
+  "MISSING_IN_FINANCIAL:FINANCIAL_VS_LEDGER": "No razão, falta no financeiro",
+  "MISSING_IN_LEDGER:BANK_VS_LEDGER": "No banco, falta no razão",
+  "MISSING_IN_BANK:BANK_VS_LEDGER": "No razão, falta no banco",
+};
+
 function divergenceRecord(d: Divergence) {
-  if (d.type === "MISSING_IN_LEDGER" && d.bankTransaction) {
-    return {
-      label: "Falta no razão",
-      date: d.bankTransaction.date,
-      amount: d.bankTransaction.amount,
-      description: d.bankTransaction.rawDescription,
-    };
-  }
-  if (d.type === "MISSING_IN_BANK" && d.ledgerEntry) {
-    return {
-      label: "Falta no extrato",
-      date: d.ledgerEntry.date,
-      amount: d.ledgerEntry.amount,
-      description: d.ledgerEntry.historico,
-    };
-  }
-  return { label: d.type, date: null, amount: null, description: "—" };
+  const label = DIVERGENCE_LABEL[`${d.type}:${d.leg}`] ?? d.type;
+  const record = d.bankTransaction
+    ? { date: d.bankTransaction.date, amount: d.bankTransaction.amount, description: d.bankTransaction.rawDescription }
+    : d.financialEntry
+      ? { date: d.financialEntry.date, amount: d.financialEntry.amount, description: d.financialEntry.description }
+      : d.ledgerEntry
+        ? { date: d.ledgerEntry.date, amount: d.ledgerEntry.amount, description: d.ledgerEntry.historico }
+        : { date: null, amount: null, description: "—" };
+  return { label, ...record };
 }
 
 const STEPS = ["Upload dos arquivos", "Conciliação", "Revisão"] as const;
@@ -110,12 +114,14 @@ function Stepper({ current }: { current: number }) {
 function UploadCard({
   label,
   hint,
+  accept,
   fileName,
   uploading,
   onSelect,
 }: {
   label: string;
   hint: string;
+  accept: string;
   fileName: string | null;
   uploading: boolean;
   onSelect: (file: File) => void;
@@ -135,7 +141,7 @@ function UploadCard({
       <input
         id={inputId}
         type="file"
-        accept=".csv,.ofx"
+        accept={accept}
         disabled={uploading}
         className="sr-only"
         onChange={(e) => {
@@ -216,20 +222,29 @@ export function BatchWorkspace({
   const [batch, setBatch] = useState(initialBatch);
   const [summary, setSummary] = useState(initialSummary);
   const [uploadingBank, setUploadingBank] = useState(false);
+  const [uploadingFinancial, setUploadingFinancial] = useState(false);
   const [uploadingLedger, setUploadingLedger] = useState(false);
   const [running, setRunning] = useState(false);
   const [updatingId, setUpdatingId] = useState<string | null>(null);
 
-  const bothUploaded = Boolean(batch.bankFileName && batch.ledgerFileName);
-  const canRun = bothUploaded && batch.status === "UPLOADED";
+  // Banco + razão são obrigatórios; o extrato do financeiro habilita a
+  // conciliação completa de 3 pontas (banco↔financeiro e financeiro↔razão)
+  const requiredUploaded = Boolean(batch.bankFileName && batch.ledgerFileName);
+  const canRun = requiredUploaded && batch.status === "UPLOADED";
   const showDashboard = batch.status === "MATCHED" || batch.status === "REVIEWED";
-  const currentStep = batch.status === "REVIEWED" ? 3 : showDashboard ? 2 : bothUploaded ? 1 : 0;
+  const currentStep = batch.status === "REVIEWED" ? 3 : showDashboard ? 2 : requiredUploaded ? 1 : 0;
 
-  async function handleUpload(kind: "bank" | "ledger", file: File) {
-    const setUploading = kind === "bank" ? setUploadingBank : setUploadingLedger;
+  async function handleUpload(kind: "bank" | "financial" | "ledger", file: File) {
+    const setUploading =
+      kind === "bank" ? setUploadingBank : kind === "financial" ? setUploadingFinancial : setUploadingLedger;
     setUploading(true);
     try {
-      const result = kind === "bank" ? await uploadBankStatement(batch.id, file) : await uploadLedger(batch.id, file);
+      const result =
+        kind === "bank"
+          ? await uploadBankStatement(batch.id, file)
+          : kind === "financial"
+            ? await uploadFinancialStatement(batch.id, file)
+            : await uploadLedger(batch.id, file);
       toast.success(`${result.imported} lançamentos importados`);
       setBatch(await getBatch(batch.id));
     } catch (err) {
@@ -303,25 +318,36 @@ export function BatchWorkspace({
         <Stepper current={currentStep} />
       </div>
 
-      {!bothUploaded && (
+      {batch.status === "UPLOADED" && (
         <Card className="animate-fade-up" style={{ "--stagger": 2 } as React.CSSProperties}>
           <CardHeader>
             <CardTitle>Upload de arquivos</CardTitle>
             <CardDescription>
-              Envie o extrato do banco e o razão contábil do mês para liberar a conciliação.
+              A conciliação tem 3 pontas: o extrato do financeiro precisa bater com o banco, e o
+              razão contábil precisa fechar com o financeiro. Banco e razão são obrigatórios.
             </CardDescription>
           </CardHeader>
-          <CardContent className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+          <CardContent className="grid grid-cols-1 gap-3 sm:grid-cols-3">
             <UploadCard
-              label="Extrato bancário"
-              hint="Clique para escolher um arquivo .csv ou .ofx"
+              label="Extrato bancário (banco)"
+              hint="Arquivo .pdf, .ofx ou .csv"
+              accept=".pdf,.ofx,.csv"
               fileName={batch.bankFileName}
               uploading={uploadingBank}
               onSelect={(file) => handleUpload("bank", file)}
             />
             <UploadCard
+              label="Extrato do financeiro (SIGAFIN)"
+              hint="Arquivo .xlsx ou .csv — habilita as 3 pontas"
+              accept=".xlsx,.xls,.csv"
+              fileName={batch.financialFileName}
+              uploading={uploadingFinancial}
+              onSelect={(file) => handleUpload("financial", file)}
+            />
+            <UploadCard
               label="Razão contábil (Protheus)"
-              hint="Clique para escolher um arquivo .csv ou .ofx"
+              hint="Arquivo .xlsx ou .csv"
+              accept=".xlsx,.xls,.csv"
               fileName={batch.ledgerFileName}
               uploading={uploadingLedger}
               onSelect={(file) => handleUpload("ledger", file)}
@@ -354,24 +380,61 @@ export function BatchWorkspace({
 
       {showDashboard && summary && (
         <>
-          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-            <KpiCard
-              icon={<Landmark className="size-4" />}
-              title="Extrato bancário"
-              pct={summary.bank.pct}
-              matched={summary.bank.matched}
-              total={summary.bank.total}
-              stagger={2}
-            />
-            <KpiCard
-              icon={<BookOpen className="size-4" />}
-              title="Razão contábil"
-              pct={summary.ledger.pct}
-              matched={summary.ledger.matched}
-              total={summary.ledger.total}
-              stagger={3}
-            />
-          </div>
+          {summary.threeWay ? (
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+              <KpiCard
+                icon={<Landmark className="size-4" />}
+                title="Banco → financeiro"
+                pct={summary.bank.pct}
+                matched={summary.bank.matched}
+                total={summary.bank.total}
+                stagger={2}
+              />
+              <KpiCard
+                icon={<Wallet className="size-4" />}
+                title="Financeiro → banco"
+                pct={summary.financial.pctVsBank}
+                matched={summary.financial.matchedVsBank}
+                total={summary.financial.total}
+                stagger={3}
+              />
+              <KpiCard
+                icon={<Wallet className="size-4" />}
+                title="Financeiro → razão"
+                pct={summary.financial.pctVsLedger}
+                matched={summary.financial.matchedVsLedger}
+                total={summary.financial.total}
+                stagger={4}
+              />
+              <KpiCard
+                icon={<BookOpen className="size-4" />}
+                title="Razão → financeiro"
+                pct={summary.ledger.pct}
+                matched={summary.ledger.matched}
+                total={summary.ledger.total}
+                stagger={5}
+              />
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+              <KpiCard
+                icon={<Landmark className="size-4" />}
+                title="Extrato bancário"
+                pct={summary.bank.pct}
+                matched={summary.bank.matched}
+                total={summary.bank.total}
+                stagger={2}
+              />
+              <KpiCard
+                icon={<BookOpen className="size-4" />}
+                title="Razão contábil"
+                pct={summary.ledger.pct}
+                matched={summary.ledger.matched}
+                total={summary.ledger.total}
+                stagger={3}
+              />
+            </div>
+          )}
 
           <Card className="animate-fade-up" style={{ "--stagger": 4 } as React.CSSProperties}>
             <CardHeader>

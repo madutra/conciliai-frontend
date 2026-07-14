@@ -7,13 +7,28 @@ import { Loader2, Plus } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { createBankAccount } from "@/lib/api";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { createBankAccount, type AccountNature } from "@/lib/api";
+
+// Conta garantida (passivo) vive com saldo devedor — o sistema precisa saber
+// pra não tratar saldo negativo como anomalia na análise das divergências
+const NATURE_ITEMS = {
+  ASSET: "Conta corrente",
+  LIABILITY: "Conta garantida",
+};
 
 export function NewAccountForm() {
   const router = useRouter();
   const [name, setName] = useState("");
   const [bankCode, setBankCode] = useState("");
   const [accountNumber, setAccountNumber] = useState("");
+  const [nature, setNature] = useState<AccountNature>("ASSET");
   const [submitting, setSubmitting] = useState(false);
 
   async function handleSubmit(e: React.FormEvent) {
@@ -25,10 +40,12 @@ export function NewAccountForm() {
         name: name.trim(),
         bankCode: bankCode.trim() || undefined,
         accountNumber: accountNumber.trim() || undefined,
+        nature,
       });
       setName("");
       setBankCode("");
       setAccountNumber("");
+      setNature("ASSET");
       toast.success("Conta bancária criada");
       router.refresh();
     } catch (err) {
@@ -69,6 +86,22 @@ export function NewAccountForm() {
           onChange={(e) => setAccountNumber(e.target.value)}
           className="w-32"
         />
+      </div>
+      <div className="grid gap-1.5">
+        <Label>Tipo</Label>
+        <Select
+          items={NATURE_ITEMS}
+          value={nature}
+          onValueChange={(value) => setNature(value as AccountNature)}
+        >
+          <SelectTrigger className="w-40">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="ASSET">Conta corrente</SelectItem>
+            <SelectItem value="LIABILITY">Conta garantida</SelectItem>
+          </SelectContent>
+        </Select>
       </div>
       <Button type="submit" disabled={submitting || !name.trim()}>
         {submitting ? <Loader2 className="size-4 animate-spin" /> : <Plus className="size-4" />}

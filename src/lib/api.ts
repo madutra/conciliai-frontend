@@ -2,7 +2,14 @@ const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:3001";
 
 export type BatchStatus = "UPLOADED" | "PROCESSING" | "MATCHED" | "REVIEWED" | "CLOSED";
 export type TxStatus = "UNMATCHED" | "MATCHED" | "PARTIAL";
-export type DivergenceType = "MISSING_IN_LEDGER" | "MISSING_IN_BANK" | "VALUE_MISMATCH" | "DUPLICATE";
+export type AccountNature = "ASSET" | "LIABILITY";
+export type MatchLeg = "BANK_VS_FINANCIAL" | "FINANCIAL_VS_LEDGER" | "BANK_VS_LEDGER";
+export type DivergenceType =
+  | "MISSING_IN_LEDGER"
+  | "MISSING_IN_BANK"
+  | "MISSING_IN_FINANCIAL"
+  | "VALUE_MISMATCH"
+  | "DUPLICATE";
 export type DivergenceStatus = "OPEN" | "RESOLVED" | "IGNORED";
 
 export interface BankAccount {
@@ -10,6 +17,7 @@ export interface BankAccount {
   name: string;
   bankCode: string | null;
   accountNumber: string | null;
+  nature: AccountNature;
   createdAt: string;
 }
 
@@ -19,6 +27,7 @@ export interface ReconciliationBatch {
   referenceMonth: string;
   status: BatchStatus;
   bankFileName: string | null;
+  financialFileName: string | null;
   ledgerFileName: string | null;
   createdAt: string;
   updatedAt: string;
@@ -48,12 +57,27 @@ export interface LedgerEntry {
   createdAt: string;
 }
 
+export interface FinancialEntry {
+  id: string;
+  batchId: string;
+  date: string;
+  amount: string;
+  description: string;
+  documentNumber: string | null;
+  statusVsBank: TxStatus;
+  statusVsLedger: TxStatus;
+  createdAt: string;
+}
+
 export interface Divergence {
   id: string;
   batchId: string;
+  leg: MatchLeg;
   type: DivergenceType;
   bankTransactionId: string | null;
   bankTransaction: BankTransaction | null;
+  financialEntryId: string | null;
+  financialEntry: FinancialEntry | null;
   ledgerEntryId: string | null;
   ledgerEntry: LedgerEntry | null;
   aiExplanation: string | null;
@@ -65,18 +89,33 @@ export interface Divergence {
 }
 
 export interface BatchSummary {
+  threeWay: boolean;
   bank: { total: number; matched: number; pct: number };
+  financial: {
+    total: number;
+    matchedVsBank: number;
+    matchedVsLedger: number;
+    pctVsBank: number;
+    pctVsLedger: number;
+  };
   ledger: { total: number; matched: number; pct: number };
   divergences: Divergence[];
 }
 
+export interface LegStats {
+  internalOffset: number;
+  docNumber: number;
+  exact: number;
+  fuzzyDate: number;
+  manyToOne: number;
+  remainingA: number;
+  remainingB: number;
+}
+
 export interface RunReconciliationResult {
   matching: {
-    exact: number;
-    fuzzyDate: number;
-    manyToOne: number;
-    remainingBankTx: number;
-    remainingLedgerTx: number;
+    threeWay: boolean;
+    legs: Record<string, LegStats>;
   };
   investigation: { investigated: number };
 }
@@ -113,6 +152,7 @@ export function createBankAccount(data: {
   name: string;
   bankCode?: string;
   accountNumber?: string;
+  nature?: AccountNature;
 }): Promise<BankAccount> {
   return apiFetch("/bank-accounts", { method: "POST", body: JSON.stringify(data) });
 }
@@ -134,6 +174,15 @@ export function uploadBankStatement(batchId: string, file: File): Promise<{ impo
   const form = new FormData();
   form.append("file", file);
   return apiFetch(`/batches/${batchId}/upload/bank-statement`, { method: "POST", body: form });
+}
+
+export function uploadFinancialStatement(
+  batchId: string,
+  file: File,
+): Promise<{ imported: number; source: string }> {
+  const form = new FormData();
+  form.append("file", file);
+  return apiFetch(`/batches/${batchId}/upload/financial-statement`, { method: "POST", body: form });
 }
 
 export function uploadLedger(batchId: string, file: File): Promise<{ imported: number; source: string }> {
